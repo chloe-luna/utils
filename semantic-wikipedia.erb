@@ -1,0 +1,775 @@
+# Advanced Ruby DSL for Semantic Wikipedia Analysis
+# Extended with temporal reasoning, causal inference, and external knowledge integration
+
+require 'json'
+require 'net/http'
+require 'uri'
+require 'date'
+require 'matrix'
+require 'statistics'
+
+module WikiSemantic
+  # Temporal reasoning engine for time-series analysis
+  class TemporalReasoner
+    def initialize(triple_store)
+      @triple_store = triple_store
+      @time_series_cache = {}
+    end
+
+    def analyze_temporal_patterns(entity_uri, days_back = 90)
+      time_series = get_time_series(entity_uri, days_back)
+      
+      {
+        trend: calculate_trend(time_series),
+        seasonality: detect_seasonality(time_series),
+        anomalies: detect_anomalies(time_series),
+        changepoints: detect_changepoints(time_series),
+        forecast: forecast_next_days(time_series, 7)
+      }
+    end
+
+    def temporal_correlation(entity1_uri, entity2_uri, days_back = 60, lag_range = (-7..7))
+      ts1 = get_time_series(entity1_uri, days_back)
+      ts2 = get_time_series(entity2_uri, days_back)
+      
+      correlations = {}
+      lag_range.each do |lag|
+        shifted_ts2 = shift_time_series(ts2, lag)
+        correlations[lag] = calculate_correlation(ts1, shifted_ts2)
+      end
+      
+      max_correlation = correlations.max_by { |lag, corr| corr.abs }
+      {
+        correlations: correlations,
+        max_lag: max_correlation[0],
+        max_correlation: max_correlation[1],
+        interpretation: interpret_temporal_correlation(max_correlation[0], max_correlation[1])
+      }
+    end
+
+    def detect_event_impact(event_date, entities, window_days = 14)
+      results = {}
+      entities.each do |entity_uri|
+        before_window = get_time_series_window(entity_uri, event_date - window_days, event_date)
+        after_window = get_time_series_window(entity_uri, event_date, event_date + window_days)
+        
+        before_avg = before_window.map(&:last).sum / before_window.length.to_f
+        after_avg = after_window.map(&:last).sum / after_window.length.to_f
+        
+        impact_score = (after_avg - before_avg) / before_avg
+        significance = statistical_significance(before_window.map(&:last), after_window.map(&:last))
+        
+        results[entity_uri] = {
+          impact_score: impact_score,
+          significance: significance,
+          interpretation: interpret_impact(impact_score, significance)
+        }
+      end
+      results
+    end
+
+    private
+
+    def get_time_series(entity_uri, days_back)
+      cache_key = "#{entity_uri}_#{days_back}"
+      return @time_series_cache[cache_key] if @time_series_cache[cache_key]
+
+      # Generate mock time series with realistic patterns
+      # In production, this would query the actual triple store
+      base_popularity = rand(1000..10000)
+      trend = (rand - 0.5) * 100
+      
+      time_series = (0...days_back).reverse_each.map do |days_ago|
+        date = Date.today - days_ago
+        
+        # Base trend
+        value = base_popularity + (trend * days_ago / days_back)
+        
+        # Add seasonality (weekly pattern)
+        weekly_factor = 1 + 0.3 * Math.sin(2 * Math::PI * date.wday / 7)
+        value *= weekly_factor
+        
+        # Add noise and occasional spikes
+        noise = (rand - 0.5) * 200
+        spike = rand < 0.05 ? rand(2000..5000) : 0  # 5% chance of spike
+        
+        [date, (value + noise + spike).round.clamp(0, Float::INFINITY)]
+      end
+      
+      @time_series_cache[cache_key] = time_series
+    end
+
+    def calculate_trend(time_series)
+      values = time_series.map(&:last)
+      x_values = (0...values.length).to_a
+      
+      # Linear regression
+      n = values.length
+      sum_x = x_values.sum
+      sum_y = values.sum
+      sum_xy = x_values.zip(values).map { |x, y| x * y }.sum
+      sum_x2 = x_values.map { |x| x * x }.sum
+      
+      slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x * sum_x).to_f
+      
+      case slope
+      when -Float::INFINITY..-50 then :steep_decline
+      when -50..-10 then :moderate_decline
+      when -10..10 then :stable
+      when 10..50 then :moderate_growth
+      when 50..Float::INFINITY then :steep_growth
+      end
+    end
+
+    def detect_seasonality(time_series)
+      values = time_series.map(&:last)
+      
+      # Simple weekly seasonality detection
+      weekly_averages = Array.new(7, 0)
+      weekly_counts = Array.new(7, 0)
+      
+      time_series.each do |date, value|
+        day_of_week = date.wday
+        weekly_averages[day_of_week] += value
+        weekly_counts[day_of_week] += 1
+      end
+      
+      weekly_averages.each_with_index { |sum, i| weekly_averages[i] = sum / weekly_counts[i].to_f }
+      
+      variance = weekly_averages.map { |avg| (avg - weekly_averages.sum / 7.0) ** 2 }.sum
+      
+      if variance > 1000000  # Threshold for significant weekly pattern
+        { type: :weekly, strength: :strong, pattern: weekly_averages }
+      else
+        { type: :none }
+      end
+    end
+
+    def detect_anomalies(time_series, threshold = 2.5)
+      values = time_series.map(&:last)
+      mean = values.sum / values.length.to_f
+      std_dev = Math.sqrt(values.map { |v| (v - mean) ** 2 }.sum / values.length.to_f)
+      
+      time_series.select do |date, value|
+        z_score = (value - mean) / std_dev
+        z_score.abs > threshold
+      end.map { |date, value| { date: date, value: value, type: value > mean ? :spike : :drop } }
+    end
+
+    def detect_changepoints(time_series, min_segment_length = 7)
+      # Simplified changepoint detection using variance
+      values = time_series.map(&:last)
+      changepoints = []
+      
+      (min_segment_length...(values.length - min_segment_length)).each do |i|
+        before_segment = values[0...i]
+        after_segment = values[i..-1]
+        
+        before_var = variance(before_segment)
+        after_var = variance(after_segment)
+        combined_var = variance(values)
+        
+        # Significant change in variance indicates a changepoint
+        if (before_var + after_var) / 2 > combined_var * 1.5
+          changepoints << {
+            date: time_series[i][0],
+            index: i,
+            significance: (before_var + after_var) / combined_var
+          }
+        end
+      end
+      
+      changepoints.sort_by { |cp| cp[:significance] }.reverse.first(3)
+    end
+
+    def forecast_next_days(time_series, days_ahead)
+      # Simple exponential smoothing forecast
+      values = time_series.map(&:last)
+      alpha = 0.3  # Smoothing parameter
+      
+      # Calculate initial smoothed value
+      smoothed = [values.first]
+      (1...values.length).each do |i|
+        smoothed << alpha * values[i] + (1 - alpha) * smoothed[i-1]
+      end
+      
+      # Forecast
+      forecast = []
+      last_smoothed = smoothed.last
+      (1..days_ahead).each do |i|
+        forecast_date = time_series.last[0] + i
+        forecast << { date: forecast_date, predicted_value: last_smoothed.round }
+      end
+      
+      forecast
+    end
+
+    def variance(values)
+      mean = values.sum / values.length.to_f
+      values.map { |v| (v - mean) ** 2 }.sum / values.length.to_f
+    end
+
+    def calculate_correlation(ts1, ts2)
+      return 0 if ts1.empty? || ts2.empty?
+      
+      values1 = ts1.map(&:last)
+      values2 = ts2.map(&:last)
+      
+      min_length = [values1.length, values2.length].min
+      values1 = values1.first(min_length)
+      values2 = values2.first(min_length)
+      
+      mean1 = values1.sum / values1.length.to_f
+      mean2 = values2.sum / values2.length.to_f
+      
+      numerator = values1.zip(values2).map { |v1, v2| (v1 - mean1) * (v2 - mean2) }.sum
+      denominator = Math.sqrt(values1.map { |v1| (v1 - mean1) ** 2 }.sum * 
+                             values2.map { |v2| (v2 - mean2) ** 2 }.sum)
+      
+      denominator.zero? ? 0 : numerator / denominator
+    end
+
+    def shift_time_series(time_series, lag)
+      return time_series if lag == 0
+      
+      if lag > 0
+        # Positive lag: shift right (delay)
+        time_series[0...-lag]
+      else
+        # Negative lag: shift left (advance)  
+        time_series[-lag..-1] || []
+      end
+    end
+
+    def interpret_temporal_correlation(lag, correlation)
+      strength = case correlation.abs
+                when 0...0.3 then 'weak'
+                when 0.3...0.7 then 'moderate'
+                else 'strong'
+                end
+      
+      direction = correlation > 0 ? 'positive' : 'negative'
+      timing = if lag == 0
+                 'simultaneous'
+               elsif lag > 0
+                 "entity1 leads by #{lag} days"
+               else
+                 "entity2 leads by #{-lag} days"
+               end
+      
+      "#{strength} #{direction} correlation, #{timing}"
+    end
+  end
+
+  # Causal inference engine
+  class CausalInferenceEngine
+    def initialize(triple_store, temporal_reasoner)
+      @triple_store = triple_store
+      @temporal_reasoner = temporal_reasoner
+    end
+
+    def infer_causality(cause_entity, effect_entity, method = :granger)
+      case method
+      when :granger
+        granger_causality_test(cause_entity, effect_entity)
+      when :intervention
+        intervention_analysis(cause_entity, effect_entity)
+      when :instrumental
+        instrumental_variable_analysis(cause_entity, effect_entity)
+      end
+    end
+
+    def discover_causal_networks(entities, confidence_threshold = 0.7)
+      causal_graph = {}
+      
+      entities.each do |cause|
+        causal_graph[cause] = []
+        entities.each do |effect|
+          next if cause == effect
+          
+          causality = infer_causality(cause, effect)
+          if causality[:confidence] > confidence_threshold
+            causal_graph[cause] << {
+              effect: effect,
+              strength: causality[:strength],
+              confidence: causality[:confidence],
+              mechanism: causality[:mechanism]
+            }
+          end
+        end
+      end
+      
+      causal_graph
+    end
+
+    def event_attribution_analysis(event_date, event_description, candidate_causes)
+      results = {}
+      
+      candidate_causes.each do |cause_entity|
+        # Analyze temporal patterns around the event
+        impact = @temporal_reasoner.detect_event_impact(event_date, [cause_entity])
+        temporal_corr = @temporal_reasoner.temporal_correlation(cause_entity, event_description)
+        
+        # Calculate attribution score
+        attribution_score = calculate_attribution_score(impact, temporal_corr, event_date, cause_entity)
+        
+        results[cause_entity] = {
+          attribution_score: attribution_score,
+          temporal_evidence: temporal_corr,
+          impact_evidence: impact[cause_entity],
+          causal_pathway: infer_causal_pathway(cause_entity, event_description)
+        }
+      end
+      
+      # Rank by attribution score
+      results.sort_by { |entity, data| -data[:attribution_score] }.to_h
+    end
+
+    private
+
+    def granger_causality_test(cause_entity, effect_entity, max_lag = 5)
+      # Simplified Granger causality test
+      cause_ts = @temporal_reasoner.send(:get_time_series, cause_entity, 60)
+      effect_ts = @temporal_reasoner.send(:get_time_series, effect_entity, 60)
+      
+      cause_values = cause_ts.map(&:last)
+      effect_values = effect_ts.map(&:last)
+      
+      # Test if past values of cause help predict effect
+      best_lag = 0
+      best_improvement = 0
+      
+      (1..max_lag).each do |lag|
+        # Fit AR model for effect without cause
+        ar_without_cause = fit_ar_model(effect_values[lag..-1])
+        
+        # Fit ARX model with cause
+        arx_with_cause = fit_arx_model(effect_values[lag..-1], cause_values[0...-lag])
+        
+        improvement = ar_without_cause[:mse] - arx_with_cause[:mse]
+        
+        if improvement > best_improvement
+          best_improvement = improvement
+          best_lag = lag
+        end
+      end
+      
+      # Statistical significance test (simplified)
+      f_statistic = (best_improvement * (effect_values.length - max_lag - 1)) / 
+                    (arx_with_cause[:mse] * max_lag)
+      
+      p_value = 1 - f_distribution_cdf(f_statistic, max_lag, effect_values.length - max_lag - 1)
+      
+      {
+        granger_causes: p_value < 0.05,
+        f_statistic: f_statistic,
+        p_value: p_value,
+        optimal_lag: best_lag,
+        strength: best_improvement,
+        confidence: 1 - p_value,
+        mechanism: "#{cause_entity} Granger-causes #{effect_entity} with lag #{best_lag}"
+      }
+    end
+
+    def intervention_analysis(cause_entity, effect_entity)
+      # Simulate intervention by finding natural experiments
+      cause_ts = @temporal_reasoner.send(:get_time_series, cause_entity, 90)
+      effect_ts = @temporal_reasoner.send(:get_time_series, effect_entity, 90)
+      
+      # Find significant changes in cause (natural interventions)
+      anomalies = @temporal_reasoner.send(:detect_anomalies, cause_ts, 2.0)
+      
+      intervention_effects = anomalies.map do |anomaly|
+        intervention_date = anomaly[:date]
+        
+        # Analyze effect response
+        effect_impact = @temporal_reasoner.detect_event_impact(
+          intervention_date, [effect_entity], 10
+        )
+        
+        {
+          intervention_date: intervention_date,
+          intervention_magnitude: anomaly[:value],
+          effect_response: effect_impact[effect_entity],
+          causal_strength: effect_impact[effect_entity][:impact_score]
+        }
+      end
+      
+      avg_causal_effect = intervention_effects.map { |ie| ie[:causal_strength] }.sum / 
+                         intervention_effects.length.to_f
+      
+      {
+        causal_effect: avg_causal_effect,
+        interventions_analyzed: intervention_effects.length,
+        confidence: intervention_effects.length > 3 ? 0.8 : 0.5,
+        strength: avg_causal_effect.abs,
+        mechanism: "Natural experiments show #{avg_causal_effect.round(2)} average causal effect"
+      }
+    end
+
+    def instrumental_variable_analysis(cause_entity, effect_entity)
+      # Simplified IV analysis - in reality would need proper instruments
+      # Find potential instrumental variables (entities that affect cause but not effect directly)
+      
+      # Mock implementation - would need sophisticated IV identification
+      {
+        iv_estimate: rand(0.1..0.9),
+        confidence: 0.6,
+        strength: rand(0.3..0.8),
+        mechanism: "Instrumental variable analysis (simplified)"
+      }
+    end
+
+    def fit_ar_model(values, order = 2)
+      # Simplified AR model fitting
+      n = values.length
+      return { mse: Float::INFINITY, coefficients: [] } if n < order + 1
+      
+      # Use method of moments for simple AR fitting
+      y = values[order..-1]
+      x_matrix = (order...n).map do |i|
+        (1..order).map { |lag| values[i - lag] }
+      end
+      
+      # Mock coefficients and MSE calculation
+      coefficients = Array.new(order) { rand(-0.5..0.5) }
+      predictions = x_matrix.map do |x_row|
+        x_row.zip(coefficients).map { |x, coef| x * coef }.sum
+      end
+      
+      mse = y.zip(predictions).map { |actual, pred| (actual - pred) ** 2 }.sum / y.length.to_f
+      
+      { mse: mse, coefficients: coefficients }
+    end
+
+    def fit_arx_model(y_values, x_values, ar_order = 2, x_order = 2)
+      # ARX model with external variables
+      n = [y_values.length, x_values.length].min
+      return { mse: Float::INFINITY, coefficients: [] } if n < ar_order + x_order + 1
+      
+      # Simplified implementation
+      ar_model = fit_ar_model(y_values, ar_order)
+      
+      # Add external variable contribution (simplified)
+      x_contribution = x_values.map { |x| x * rand(-0.1..0.1) }
+      improved_mse = ar_model[:mse] * (0.7 + rand * 0.2)  # Mock improvement
+      
+      { mse: improved_mse, coefficients: ar_model[:coefficients] + [rand(-0.2..0.2)] }
+    end
+
+    def f_distribution_cdf(f_value, df1, df2)
+      # Simplified F-distribution CDF approximation
+      return 0 if f_value <= 0
+      return 1 if f_value > 10
+      
+      # Rough approximation for demonstration
+      1 - Math.exp(-f_value / 2)
+    end
+
+    def calculate_attribution_score(impact, temporal_corr, event_date, cause_entity)
+      impact_score = impact[cause_entity][:impact_score].abs rescue 0
+      correlation_score = temporal_corr[:max_correlation].abs rescue 0
+      timing_score = temporal_corr[:max_lag].abs <= 3 ? 1.0 : 0.5
+      
+      (impact_score * 0.4 + correlation_score * 0.4 + timing_score * 0.2).clamp(0, 1)
+    end
+
+    def infer_causal_pathway(cause_entity, effect_entity)
+      # Mock causal pathway inference
+      pathways = [
+        "direct influence",
+        "media attention cascade", 
+        "social contagion effect",
+        "algorithmic amplification",
+        "cultural zeitgeist shift"
+      ]
+      
+      pathways.sample
+    end
+  end
+
+  # External knowledge base integrator
+  class ExternalKnowledgeIntegrator
+    def initialize
+      @cache = {}
+      @session = Net::HTTP.new
+    end
+
+    def enrich_with_wikidata(entity_uri)
+      wikidata_id = extract_wikidata_id(entity_uri)
+      return {} unless wikidata_id
+      
+      cache_key = "wikidata_#{wikidata_id}"
+      return @cache[cache_key] if @cache[cache_key]
+      
+      enrichment = query_wikidata_full(wikidata_id)
+      @cache[cache_key] = enrichment
+    end
+
+    def enrich_with_dbpedia(entity_name)
+      cache_key = "dbpedia_#{entity_name}"
+      return @cache[cache_key] if @cache[cache_key]
+      
+      # Mock DBpedia integration
+      enrichment = {
+        abstract: "Mock abstract from DBpedia for #{entity_name}",
+        categories: ["Category:#{entity_name} related topics"],
+        external_links: ["http://example.com/#{entity_name}"],
+        infobox_data: { 
+          "birth_place" => "Mock City",
+          "occupation" => "Mock Occupation" 
+        }
+      }
+      
+      @cache[cache_key] = enrichment
+    end
+
+    def enrich_with_scholarly_data(entity_name)
+      # Integration with academic databases (mock)
+      {
+        citation_count: rand(100..10000),
+        h_index: rand(10..100),
+        recent_papers: generate_mock_papers(entity_name),
+        collaboration_network: generate_mock_collaborators(entity_name),
+        research_areas: generate_mock_research_areas
+      }
+    end
+
+    def enrich_with_news_context(entity_name, days_back = 30)
+      # Mock news API integration
+      mock_news_events(entity_name, days_back)
+    end
+
+    def enrich_with_social_signals(entity_name)
+      # Mock social media analysis
+      {
+        sentiment_score: rand(-1.0..1.0),
+        mention_frequency: rand(100..10000),
+        trending_hashtags: ["##{entity_name.gsub(' ', '')}", "#trending", "#viral"],
+        influential_accounts: ["@account1", "@account2", "@account3"],
+        geographic_distribution: {
+          "US" => rand(0.2..0.4),
+          "UK" => rand(0.1..0.2), 
+          "Other" => rand(0.4..0.7)
+        }
+      }
+    end
+
+    private
+
+    def extract_wikidata_id(entity_uri)
+      # Extract Wikidata ID from URI
+      entity_uri.match(/Q\d+/)&.[](0)
+    end
+
+    def query_wikidata_full(wikidata_id)
+      # Mock comprehensive Wikidata query
+      {
+        labels: { "en" => "Mock Label for #{wikidata_id}" },
+        descriptions: { "en" => "Mock description" },
+        claims: {
+          "P31" => [{ "value" => "Q5" }],  # instance of human
+          "P569" => [{ "value" => "1950-01-01" }],  # birth date
+          "P106" => [{ "value" => "Q901" }]  # occupation: scientist
+        },
+        sitelinks: {
+          "enwiki" => { "title" => "Mock_Wikipedia_Article" }
+        }
+      }
+    end
+
+    def generate_mock_papers(entity_name)
+      (1..5).map do |i|
+        {
+          title: "Mock Paper #{i} by #{entity_name}",
+          year: rand(2015..2024),
+          citations: rand(10..500),
+          journal: "Mock Journal of #{entity_name.split.first} Studies"
+        }
+      end
+    end
+
+    def generate_mock_collaborators(entity_name)
+      collaborators = ["Dr. Mock Collaborator", "Prof. Example Person", "Dr. Sample Researcher"]
+      collaborators.map do |name|
+        {
+          name: name,
+          collaboration_strength: rand(0.1..0.9),
+          joint_papers: rand(1..10)
+        }
+      end
+    end
+
+    def generate_mock_research_areas
+      areas = ["Machine Learning", "Quantum Physics", "Climate Science", "Genomics", "Neuroscience"]
+      areas.sample(rand(2..4)).map do |area|
+        {
+          area: area,
+          expertise_score: rand(0.5..1.0),
+          papers_in_area: rand(5..20)
+        }
+      end
+    end
+
+    def mock_news_events(entity_name, days_back)
+      events = []
+      (1..rand(3..8)).each do |i|
+        events << {
+          date: Date.today - rand(1..days_back),
+          headline: "Mock news headline #{i} about #{entity_name}",
+          source: "Mock News Source",
+          sentiment: rand(-0.5..0.5),
+          relevance_score: rand(0.6..1.0)
+        }
+      end
+      events.sort_by { |event| -event[:relevance_score] }
+    end
+  end
+
+  # Extended QueryBuilder with advanced features
+  class QueryBuilder
+    attr_reader :temporal_reasoner, :causal_engine, :knowledge_integrator
+
+    def initialize(triple_store)
+      super
+      @temporal_reasoner = TemporalReasoner.new(triple_store)
+      @causal_engine = CausalInferenceEngine.new(triple_store, @temporal_reasoner)
+      @knowledge_integrator = ExternalKnowledgeIntegrator.new
+    end
+
+    # Temporal reasoning methods
+    def with_temporal_pattern(pattern_type)
+      case pattern_type
+      when :trending_up
+        add_filter("?trending_score > 1.0")
+      when :seasonal_spike
+        # Would integrate with temporal reasoner
+        add_filter("?is_seasonal_anomaly = true")
+      when :viral_burst
+        trending(3.0).spiking
+      end
+      self
+    end
+
+    def temporal_correlation_with(other_entity, min_correlation = 0.7)
+      # Add virtual predicate for temporal correlation
+      add_pattern(@current_subject, 'pv:temporallyCorrelatedWith', "\"#{other_entity}\"")
+      add_filter("?correlation_strength >= #{min_correlation}")
+      self
+    end
+
+    def influenced_by_event(event_name, max_days_after = 14)
+      event_var = '?influencing_event'
+      add_pattern(event_var, 'rdfs:label', "\"#{event_name}\"")
+      add_pattern(event_var, 'pv:hasTimestamp', '?event_time')
+      add_pattern('?event', 'pv:hasTimestamp', '?article_time')
+      add_filter("?article_time > ?event_time")
+      add_filter("(?article_time - ?event_time) <= #{max_days_after}")
+      self
+    end
+
+    def causal_ancestor_of(descendant_entity, max_hops = 3)
+      # Multi-hop causal relationship
+      (1..max_hops).each do |hop|
+        hop_var = "?causal_hop_#{hop}"
+        if hop == 1
+          add_pattern(@current_subject, 'pv:causallyInfluences', hop_var)
+        else
+          prev_hop_var = "?causal_hop_#{hop-1}"
+          add_pattern(prev_hop_var, 'pv:causallyInfluences', hop_var)
+        end
+      end
+      
+      final_hop_var = "?causal_hop_#{max_hops}"
+      add_pattern(final_hop_var, 'rdfs:label', "\"#{descendant_entity}\"")
+      self
+    end
+
+    def with_external_validation(source = :all)
+      sources = case source
+               when :all then [:wikidata, :dbpedia, :scholarly, :news]
+               when Array then source
+               else [source]
+               end
+      
+      sources.each do |src|
+        add_pattern(@current_subject, "pv:validatedBy#{src.to_s.capitalize}", 'true')
+      end
+      self
+    end
+
+    # Advanced analytics methods
+    def anomaly_detection(sensitivity = :medium)
+      threshold = case sensitivity
+                 when :low then 3.0
+                 when :medium then 2.5
+                 when :high then 2.0
+                 end
+      
+      add_pattern('?event', 'pv:anomalyScore', '?anomaly_score')
+      add_filter("?anomaly_score > #{threshold}")
+      self
+    end
+
+    def network_centrality(centrality_type = :pagerank, min_score = 0.1)
+      add_pattern(@current_subject, "pv:#{centrality_type}Centrality", '?centrality_score')
+      add_filter("?centrality_score >= #{min_score}")
+      self
+    end
+
+    def semantic_similarity_to(target_entity, min_similarity = 0.8, method = :embedding)
+      similarity_predicate = case method
+                           when :embedding then 'pv:embeddingSimilarity'
+                           when :graph then 'pv:graphSimilarity'
+                           when :content then 'pv:contentSimilarity'
+                           end
+      
+      add_pattern(@current_subject, similarity_predicate, '?similarity_relation')
+      add_pattern('?similarity_relation', 'pv:targetEntity', "\"#{target_entity}\"")
+      add_pattern('?similarity_relation', 'pv:similarityScore', '?sim_score')
+      add_filter("?sim_score >= #{min_similarity}")
+      self
+    end
+
+    # Execution with advanced analytics
+    def with_temporal_analysis
+      results = execute
+      results.map do |result|
+        entity_uri = result['article']
+        temporal_data = @temporal_reasoner.analyze_temporal_patterns(entity_uri)
+        result.merge('temporal_analysis' => temporal_data)
+      end
+    end
+
+    def with_causal_analysis
+      results = execute
+      entities = results.map { |r| r['article'] }
+      
+      # Build causal network
+      causal_network = @causal_engine.discover_causal_networks(entities, 0.6)
+      
+      results.map do |result|
+        entity_uri = result['article']
+        causal_data = {
+          causes: causal_network.select { |cause, effects| 
+            effects.any? { |effect| effect[:effect] == entity_uri }
+          },
+          effects: causal_network[entity_uri] || []
+        }
+        result.merge('causal_analysis' => causal_data)
+      end
+    end
+
+    def with_external_enrichment(*sources)
+      results = execute
+      sources = [:wikidata, :dbpedia, :scholarly, :news, :social] if sources.empty?
+      
+      results.map do |result|
+        entity_name = result['label']
+        entity_uri = result['article']
+        
+        enrichment = {}
+        sources.each do |source|
+          enrichment[source] = case source
+                              when :wikidata
+                                @knowledge_
